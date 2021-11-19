@@ -22,7 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,23 +36,30 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-#define sampleSize 2500
-#define ADC_BufferLength (sampleSize * 2)
+#define sampleSize 4096
+#define adcBufferLength (sampleSize * 2)
+#define bufferLength 1
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc3;
-DMA_HandleTypeDef hdma_adc3;
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
 
-uint16_t adcBuffer[ADC_BufferLength];
-uint16_t adcDistanceCount = 0;
+uint16_t adcBuffer[adcBufferLength];
+uint16_t adcBufferTemp[adcBufferLength];
+uint32_t adcDistanceCount = 0;
 
 //Conversion ratio variable:
-uint16_t MM_PPR_Conversion = 0;
+float MM_PPR_Forward = (8600.0f / 765.0f);
+float MM_PPR_Reverse = (12100.0f / 765.0f);
+
+//Time delay variable
+const int forwardDelay = 25;
+const int reverseDelay = 30;
 
 //Segment identification variable:
 /* if the colourSelector = 0 -> White segment excited
@@ -65,8 +72,9 @@ int colourSelector = 0;
  * may run.
  */
 int forward = 1;
-int forwardFinal = 1;
+int forwardFinal = 0;
 int reverse = 0;
+int returnHome = 0;
 
 /* Directional distance variables used to tell the motor how
  * far to travel in either of the two directions. Because the
@@ -74,12 +82,18 @@ int reverse = 0;
  * distances that the motor can move, which are approximately
  * a minimum of 6mm increments.
  */
-int forwardDistance = 0;
-int reverseDistance = 0;
-int forwardFinalDistance = 0;
+int forwardDistance = 700;
+int reverseDistance = 400;
+int forwardFinalDistance = 200;
 
 //Temporary placeholder variables
 int stop_reset = 0;
+
+//Bluetooth GUI module variables
+uint8_t RxBuffer[bufferLength] = {0};
+uint8_t mydata[] = "";
+uint8_t mydata_bt[] = "";
+uint8_t store_data[2] = "";
 
 /* USER CODE END PV */
 
@@ -87,9 +101,13 @@ int stop_reset = 0;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_ADC3_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
+void run_Forward_Sequence(int);
+void run_Reverse_Sequence(int);
+void stop_Motor();
+void motor_ReturnHome();
 
 /* USER CODE END PFP */
 
@@ -127,24 +145,52 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ADC3_Init();
   MX_TIM2_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_ADC_Start_DMA(&hadc3, (uint32_t*)adcBuffer, ADC_BufferLength);
+
+  /* Initialise the connection between the ADC Buffer and DMA. This
+   * allows me to store all ADC readings directly into memory without
+   * having to pass through the processor. This will prevent the
+   * processor from slowing down during other computation.
+   */
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adcBuffer, adcBufferLength);
+
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  /* Before the motor receives commands, it must always move to the
+   * left most position on the rail so that the first forward command
+   * can execute.
+   */
+  while(!HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); 	//Brown
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);	//White
+	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);	//Yellow
+  }
+  motor_ReturnHome();
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  while(!__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_11)){
-		  motor_ReturnHome();
 
-		  if (forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_13)){
+	  /* The first check-point or criterion that needs to be satisfied
+	   * is that the E-Stop switch must not be depressed. When the E-Stop
+	   * is depressed, it breaks the circuit and sends a logic low level to
+	   * the board GPIO.
+	   */
+	  while(HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
+
+		  /* The criterion for the forward movement for the motor is that the
+		   * forward flag must be set and the right-most limit switch must not
+		   * be depressed. If depressed, it implies the motor has reached the
+		   * end of the rail. Once finished moving, the forward flag is reset
+		   * and the reverse flag is set.
+		   */
+		  if (forward && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13)){
 			  run_Forward_Sequence(forwardDistance);
 			  stop_Motor();
 			  adcDistanceCount = 0;
@@ -152,7 +198,14 @@ int main(void)
 			  forwardFinal = 0;
 			  reverse = 1;
 		  }
-		  else if(reverse && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_15)){
+
+		  /* The criterion for the reverse movement for the motor is that the
+		   * reverse flag must be set and the left-most limit switch must not
+		   * be depressed. If depressed, it implies the motor has reached the
+		   * end of the rail. Once finished moving, the forwardFinal flag is
+		   * set and the reverse flag is reset.
+		   */
+		  else if(reverse && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15)){
 			  run_Reverse_Sequence(reverseDistance);
 			  stop_Motor();
 			  adcDistanceCount = 0;
@@ -160,15 +213,30 @@ int main(void)
 			  forward = 0;
 			  forwardFinal = 1;
 		  }
-		  else if(forwardFinal && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_13)){
+
+		  /* The criterion for this final forward movement is identical to
+		   * that of the forward movement described above. When finished moving,
+		   * all directional flags are reset and the motor must return back to
+		   * its starting position.
+		   */
+		  else if(forwardFinal && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13)){
 			  run_Forward_Sequence(forwardFinalDistance);
 			  stop_Motor();
+			  adcDistanceCount = 0;
+			  motor_ReturnHome();
 			  adcDistanceCount = 0;
 			  forwardFinal = 0;
 			  reverse = 0;
 			  forward = 0;
+			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); 	//Brown
+			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);	//White
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);	//Yellow
 		  }
 	  }
+
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); 	//Brown
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);	//White
+	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);	//Yellow
   }
   /* USER CODE END 3 */
 }
@@ -218,52 +286,52 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief ADC3 Initialization Function
+  * @brief ADC1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_ADC3_Init(void)
+static void MX_ADC1_Init(void)
 {
 
-  /* USER CODE BEGIN ADC3_Init 0 */
+  /* USER CODE BEGIN ADC1_Init 0 */
 
-  /* USER CODE END ADC3_Init 0 */
+  /* USER CODE END ADC1_Init 0 */
 
   ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE BEGIN ADC3_Init 1 */
+  /* USER CODE BEGIN ADC1_Init 1 */
 
-  /* USER CODE END ADC3_Init 1 */
+  /* USER CODE END ADC1_Init 1 */
   /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
   */
-  hadc3.Instance = ADC3;
-  hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
-  hadc3.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc3.Init.ScanConvMode = DISABLE;
-  hadc3.Init.ContinuousConvMode = DISABLE;
-  hadc3.Init.DiscontinuousConvMode = DISABLE;
-  hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc3.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc3.Init.NbrOfConversion = 1;
-  hadc3.Init.DMAContinuousRequests = DISABLE;
-  hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  if (HAL_ADC_Init(&hadc3) != HAL_OK)
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
   }
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-  sConfig.Channel = ADC_CHANNEL_13;
+  sConfig.Channel = ADC_CHANNEL_5;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK)
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC3_Init 2 */
+  /* USER CODE BEGIN ADC1_Init 2 */
 
-  /* USER CODE END ADC3_Init 2 */
+  /* USER CODE END ADC1_Init 2 */
 
 }
 
@@ -339,15 +407,25 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, White_Phase_Pin|Brown_Phase_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(Yellow_Phase_GPIO_Port, Yellow_Phase_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : Stop_Motor_Exit_Pin */
+  GPIO_InitStruct.Pin = Stop_Motor_Exit_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(Stop_Motor_Exit_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : White_Phase_Pin Brown_Phase_Pin */
   GPIO_InitStruct.Pin = White_Phase_Pin|Brown_Phase_Pin;
@@ -363,15 +441,26 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Yellow_Phase_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : E_Stop_Interrupt_Pin Right_Limit_Switch_Pin Left_Limit_Switch_Pin */
-  GPIO_InitStruct.Pin = E_Stop_Interrupt_Pin|Right_Limit_Switch_Pin|Left_Limit_Switch_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  /*Configure GPIO pins : E_Stop_Detection_Pin Right_Limit_Detection_Pin Left_Limit_Detection_Pin */
+  GPIO_InitStruct.Pin = E_Stop_Detection_Pin|Right_Limit_Detection_Pin|Left_Limit_Detection_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+  /*Configure GPIO pin : PC11 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF8_UART4;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PG13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
 }
 
@@ -380,13 +469,31 @@ static void MX_GPIO_Init(void)
 /*******************************/
 /* Setting up code for the ADC */
 /*******************************/
+
+/* This half callback function provides the calculations required
+ * on the first half of the DMA register being used.
+ */
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc){
-	HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);
+
+	for(int i = 1; (i < sampleSize + 1); i++){
+			adcBufferTemp[i-1] = adcBuffer[i-1];
+			if((adcBufferTemp[i] > 2900) && (adcBufferTemp[i-1] < 500)){
+				adcDistanceCount++;
+			}
+		}
 }
 
+/* This complete callback function provides the calculations
+ * required on the second half of the DMA register being used.
+ */
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
-	HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_RESET);
-	HAL_ADC_Start_DMA(&hadc3, (uint32_t*)adcBuffer, ADC_BufferLength);
+
+	for(int i = sampleSize+1; (i < 2*sampleSize+1); i++){
+			adcBufferTemp[i-1] = adcBuffer[i-1];
+			if((adcBufferTemp[i] > 2900) && (adcBufferTemp[i-1] < 500)){
+				adcDistanceCount++;
+			}
+		}
 }
 
 /*******************************/
@@ -397,9 +504,9 @@ void run_Forward_Sequence(int distance) {
 	 * associated to the motor segments to successfully move in the
 	 * forward direction. The pins excitation or pin HIGH/LOW allocation
 	 * is as follows:
-	 * 1. White (Pin A2)
-	 * 2. Brown (Pin A4)
-	 * 3. Yellow (Pin A6)
+	 * 1. Brown (Pin A4)
+	 * 2. White (Pin A6)
+	 * 3. Yellow (Pin C4)
 	 * Exciting these three cable colours in this order will move the
 	 * motor forward successfully (left to right on the rail).
 	 *
@@ -407,48 +514,67 @@ void run_Forward_Sequence(int distance) {
 	 * a valid distance measurement to tell the forward sequence to know
 	 * when to stop cycling. */
 
-	int adcCountReq = distance * MM_PPR_Conversion;
+	int adcCountReq = (int)(distance * MM_PPR_Forward);
 
-	while (!__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_11)){
+	/* First, I check whether or not the E-Stop button is depressed before
+	 * allowing the remainer of the code to run.
+	 */
+	while (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11) && adcDistanceCount < adcCountReq && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13)){
 		/* Inside this while loop, I want to cycle through the output pins
 		 * connected to the relays controlling which motor segment to excite.
 		 */
-		if (adcDistanceCount < adcCountReq && forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_13)){
+		if (adcDistanceCount < adcCountReq && (forward || forwardFinal) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
 			/* If all of the criteria for the if statement are met, the first
 			 * of the three segments will be excited by writing the digital
 			 * output pin high as follows:
+			 *
+			 * On a side note, because a P-channel transistor is implemented
+			 * on the switching circuit, the logic level for the relays need to
+			 * be inversed to switch. Therefore, whenever a pin is reset, the
+			 * relay coil conducts.
 			 */
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); 	//White
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); 	//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
 			colourSelector = 0;
-			HAL_Delay(500);
+			HAL_Delay(forwardDelay);
 		}
 
-		if(adcDistanceCount < adcCountReq && forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_13)){
+		if(adcDistanceCount < adcCountReq && (forward || forwardFinal) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
 			/* If all the criteria for the if statement are met, the next
 			 * segment will be excited by writing the digital output pin
 			 * high as follows:
+			 *
+			 * On a side note, because a P-channel transistor is implemented
+			 * on the switching circuit, the logic level for the relays need to
+			 * be inversed to switch. Therefore, whenever a pin is reset, the
+			 * relay coil conducts.
 			 */
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//Brown
-			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
 			colourSelector = 1;
-			HAL_Delay(500);
+			HAL_Delay(forwardDelay);
 		}
 
-		if(adcDistanceCount < adcCountReq && forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_13)){
+		if(adcDistanceCount < adcCountReq && (forward || forwardFinal) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
 			/* If all the criteria for the if statement are met, the final
 			 * segment of the motor will be excited by writing the digital
 			 * output pin high as follows:
+			 *
+			 * On a side note, because a P-channel transistor is implemented
+			 * on the switching circuit, the logic level for the relays need to
+			 * be inversed to switch. Therefore, whenever a pin is reset, the
+			 * relay coil conducts.
 			 */
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
 			colourSelector = 2;
-			HAL_Delay(500);
+			HAL_Delay(forwardDelay);
 		}
 	}
+	return;
 }
 
 /*******************************/
@@ -461,58 +587,77 @@ void run_Reverse_Sequence(int distance){
 	 * cycling of the motor segments. Therefore, the excitation cycling will
 	 * will following the pattern below:
 	 * 1. Yellow
-	 * 2. Brown
-	 * 3. White
+	 * 2. White
+	 * 3. Brown
 	 * Exciting in this order will cause for the motor to run in the reverse
 	 * direction (right to left on the rail)
 	 *
 	 * Again, the ADC PPR value needs to be determined first to allow the
 	 * function to determine when the reverse sequence needs to stop running:*/
 
-	int adcCountReq = distance * MM_PPR_Conversion;
+	int adcCountReq = (int)(distance * MM_PPR_Reverse);
 
-	while (!__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_11)) {
+	/* First I check to see if the E-Stop button has been depressed before
+	 * running the remainder of the code.
+	 */
+	while (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11) && adcDistanceCount < adcCountReq && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15)) {
 		/* Inside this while loop, I want to cycle through the output pins
 		 * connected to the relays controlling which motor segment to excite.
 		 * I first need to do the timing considerations before I can program
 		 * the cycling sequence. */
 
-		if (adcDistanceCount < adcCountReq && forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_15)){
+		if (adcDistanceCount < adcCountReq && (reverse || returnHome) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
 			/* If all of the criteria for the if statement are met, the first
 			 * of the three segments will be excited by writing the digital
 			 * output pin high as follows:
+			 *
+			 * On a side note, because a P-channel transistor is implemented
+			 * on the switching circuit, the logic level for the relays need to
+			 * be inversed to switch. Therefore, whenever a pin is reset, the
+			 * relay coil conducts.
 			 */
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
-			colourSelector = 2;
-			HAL_Delay(500);
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);  //Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);	   //White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);	   //Yellow
+			colourSelector = 0;
+			HAL_Delay(reverseDelay);
 		}
 
-		if(adcDistanceCount < adcCountReq && forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_15)){
+		if(adcDistanceCount < adcCountReq && (reverse || returnHome) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
 			/* If all the criteria for the if statement are met, the next
 			 * segment will be excited by writing the digital output pin
 			 * high as follows:
+			 *
+			 * On a side note, because a P-channel transistor is implemented
+			 * on the switching circuit, the logic level for the relays need to
+			 * be inversed to switch. Therefore, whenever a pin is reset, the
+			 * relay coil conducts.
 			 */
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//White
 			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
-			colourSelector = 1;
-			HAL_Delay(500);
+			colourSelector = 2;
+			HAL_Delay(reverseDelay);
 		}
 
-		if(adcDistanceCount < adcCountReq && forward && !__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_15)){
+		if(adcDistanceCount < adcCountReq && (reverse || returnHome) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
 			/* If all the criteria for the if statement are met, the final
 			 * segment of the motor will be excited by writing the digital
 			 * output pin high as follows:
+			 *
+			 * On a side note, because a P-channel transistor is implemented
+			 * on the switching circuit, the logic level for the relays need to
+			 * be inversed to switch. Therefore, whenever a pin is reset, the
+			 * relay coil conducts.
 			 */
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//White
-			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
-			colourSelector = 0;
-			HAL_Delay(500);
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
+			colourSelector = 1;
+			HAL_Delay(reverseDelay);
 		}
 	}
+	return;
 }
 
 /*******************************/
@@ -525,37 +670,33 @@ void stop_Motor(){
 	 * need to know which segment was excited last and then hold the excitation
 	 * on that segment until  a new distance command is called or provided.*/
 
-	while (colourSelector == 0 && !stop_reset){
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//White
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
-		HAL_Delay(1000);
-	}
+	while (!HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) && HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11)){
+		if (colourSelector == 0){
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
+		}
 
-	while (colourSelector == 1 && !stop_reset){
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//Brown
-		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
-		HAL_Delay(1000);
-	}
+		if (colourSelector == 1){
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
+		}
 
-	while (colourSelector == 2 && !stop_reset){
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);		//Yellow
-		HAL_Delay(1000);
+		if (colourSelector == 2){
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);		//Brown
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);		//White
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
+		}
 	}
+	return;
 
 
 
 	/* I need to figure out an exit strategy for this function. I am not yet sure how I
 	 * can leave the stop_Motor function. Maybe the best way is to use the on-board
-	 * push-button on the board as my exit strategy. Once the button is pushed, exit
+	 * push-button as my exit strategy. Once the button is pushed, exit
 	 * the function.
-	 */
-
-	/* I think using a delay should work well enough just to "pause" the motor for long
-	 * enough until the motor needs to move again.
 	 */
 }
 
@@ -569,58 +710,46 @@ void motor_ReturnHome(){
 	 * the left-most limit switch has been triggered.
 	 */
 
-	if (!__HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_11)){
-		run_Reverse_Sequence(1000);
+	/* First I check to see if the E-Stop button is depressed before
+	 * running the remainder of the code.
+	 */
+	returnHome = 1;
+	if (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15)){
+		run_Reverse_Sequence(765);
+		stop_Motor();
+		returnHome = 0;
+		adcDistanceCount = 0;
 	}
+	return;
 }
 
-/*****************************/
-/* Interrupt Service Routine */
-/*****************************/
+/*******************************/
+/* 	 Blue tooth Module GUI     */
+/*******************************/
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-	/* The first interrupt with the highest priority that I want to set up is the
-	 * E-stop. This interrupt is slightly different because the button will stay
-	 * depressed for a longer period of time and needs to be manually disengaged:
-	 */
-
-	while (GPIO_Pin == GPIO_PIN_11){
-		//Turn off all motor outputs
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);	//White
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);	//Brown
-		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);	//Yellow
-	}
-
-	/* The second interrupt that I want to do is set the right limit switch interrupt
-	 * with a low priority that only gets depressed once.
-	 */
-
-	if (GPIO_Pin == GPIO_PIN_13){
-		/* If the right-most limit switch is hit, the motor needs to immediately stop
-		 * moving and change to the distances that need to be run in the opposite
-		 * direction (change from forward to reverse).
-		 */
-		stop_Motor();
-		adcDistanceCount = 0;
-		forward = 0;
-		reverse = 1;
-	}
-
-	/* The last interrupt that I want to do is set the left limit switch interrupt
-	 * with a low priority that only gets depressed once.
-	 */
-
-	if (GPIO_Pin == GPIO_PIN_15){
-		/* If the left-most limit switch is hit, the motor needs to immediately stop
-		 * moving and change to the distances that need to be run in the opposite
-		 * direction (change from reverse to forward).
-		 */
-		stop_Motor();
-		adcDistanceCount = 0;
-		reverse = 0;
-		forward = 1;
-	}
-}
+//void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
+//
+//	int temp = strlen((char*)mydata_bt);
+//
+//	for (int i = 0; i < temp; i++){
+//		store_data[i] = mydata_bt[i];
+//	}
+//
+//	//Create variables to provide on/off functionality
+////	char on[1] = 'n';
+////	char off[1] = 'f';
+//
+//	if (store_data[0] == 'n'){
+//		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);
+//		store_data[0] = '0';
+//		store_data[1] = '0';
+//	}else if (store_data[0] == 'f'){
+//		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET);
+//		store_data[0] = '0';
+//		store_data[1] = '0';
+//	}
+//
+//}
 
 /* USER CODE END 4 */
 

@@ -58,23 +58,20 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define Encoder_Input_Pin GPIO_PIN_3
-#define Encoder_Input_GPIO_Port GPIOC
+#define Stop_Motor_Exit_Pin GPIO_PIN_0
+#define Stop_Motor_Exit_GPIO_Port GPIOA
 #define White_Phase_Pin GPIO_PIN_4
 #define White_Phase_GPIO_Port GPIOA
 #define Brown_Phase_Pin GPIO_PIN_6
 #define Brown_Phase_GPIO_Port GPIOA
 #define Yellow_Phase_Pin GPIO_PIN_4
 #define Yellow_Phase_GPIO_Port GPIOC
-#define E_Stop_Interrupt_Pin GPIO_PIN_11
-#define E_Stop_Interrupt_GPIO_Port GPIOF
-#define E_Stop_Interrupt_EXTI_IRQn EXTI15_10_IRQn
-#define Right_Limit_Switch_Pin GPIO_PIN_13
-#define Right_Limit_Switch_GPIO_Port GPIOF
-#define Right_Limit_Switch_EXTI_IRQn EXTI15_10_IRQn
-#define Left_Limit_Switch_Pin GPIO_PIN_15
-#define Left_Limit_Switch_GPIO_Port GPIOF
-#define Left_Limit_Switch_EXTI_IRQn EXTI15_10_IRQn
+#define E_Stop_Detection_Pin GPIO_PIN_11
+#define E_Stop_Detection_GPIO_Port GPIOF
+#define Right_Limit_Detection_Pin GPIO_PIN_13
+#define Right_Limit_Detection_GPIO_Port GPIOF
+#define Left_Limit_Detection_Pin GPIO_PIN_15
+#define Left_Limit_Detection_GPIO_Port GPIOF
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

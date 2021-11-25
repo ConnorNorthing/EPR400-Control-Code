@@ -1470,7 +1470,7 @@ void run_Forward_Sequence(int distance) {
  8000bce:	2200      	movs	r2, #0
  8000bd0:	601a      	str	r2, [r3, #0]
 			HAL_Delay(forwardDelay);
- 8000bd2:	2319      	movs	r3, #25
+ 8000bd2:	2315      	movs	r3, #21
  8000bd4:	4618      	mov	r0, r3
  8000bd6:	f000 fbd9 	bl	800138c <HAL_Delay>
 		}
@@ -1526,7 +1526,7 @@ void run_Forward_Sequence(int distance) {
  8000c34:	2201      	movs	r2, #1
  8000c36:	601a      	str	r2, [r3, #0]
 			HAL_Delay(forwardDelay);
- 8000c38:	2319      	movs	r3, #25
+ 8000c38:	2315      	movs	r3, #21
  8000c3a:	4618      	mov	r0, r3
  8000c3c:	f000 fba6 	bl	800138c <HAL_Delay>
 		}
@@ -1582,7 +1582,7 @@ void run_Forward_Sequence(int distance) {
  8000c9a:	2202      	movs	r2, #2
  8000c9c:	601a      	str	r2, [r3, #0]
 			HAL_Delay(forwardDelay);
- 8000c9e:	2319      	movs	r3, #25
+ 8000c9e:	2315      	movs	r3, #21
  8000ca0:	4618      	mov	r0, r3
  8000ca2:	f000 fb73 	bl	800138c <HAL_Delay>
 	while (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11) && adcDistanceCount < adcCountReq && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_13)){
@@ -1709,7 +1709,7 @@ void run_Reverse_Sequence(int distance){
  8000d7e:	2200      	movs	r2, #0
  8000d80:	601a      	str	r2, [r3, #0]
 			HAL_Delay(reverseDelay);
- 8000d82:	231e      	movs	r3, #30
+ 8000d82:	2315      	movs	r3, #21
  8000d84:	4618      	mov	r0, r3
  8000d86:	f000 fb01 	bl	800138c <HAL_Delay>
 		}
@@ -1765,7 +1765,7 @@ void run_Reverse_Sequence(int distance){
  8000de4:	2202      	movs	r2, #2
  8000de6:	601a      	str	r2, [r3, #0]
 			HAL_Delay(reverseDelay);
- 8000de8:	231e      	movs	r3, #30
+ 8000de8:	2315      	movs	r3, #21
  8000dea:	4618      	mov	r0, r3
  8000dec:	f000 face 	bl	800138c <HAL_Delay>
 		}
@@ -1821,7 +1821,7 @@ void run_Reverse_Sequence(int distance){
  8000e4a:	2201      	movs	r2, #1
  8000e4c:	601a      	str	r2, [r3, #0]
 			HAL_Delay(reverseDelay);
- 8000e4e:	231e      	movs	r3, #30
+ 8000e4e:	2315      	movs	r3, #21
  8000e50:	4618      	mov	r0, r3
  8000e52:	f000 fa9b 	bl	800138c <HAL_Delay>
 	while (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11) && adcDistanceCount < adcCountReq && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15)) {
@@ -2001,8 +2001,8 @@ void motor_ReturnHome(){
  8000f7c:	4603      	mov	r3, r0
  8000f7e:	2b00      	cmp	r3, #0
  8000f80:	d10c      	bne.n	8000f9c <motor_ReturnHome+0x44>
-		run_Reverse_Sequence(765);
- 8000f82:	f240 20fd 	movw	r0, #765	; 0x2fd
+		run_Reverse_Sequence(2000);
+ 8000f82:	f44f 60fa 	mov.w	r0, #2000	; 0x7d0
  8000f86:	f7ff feb9 	bl	8000cfc <run_Reverse_Sequence>
 		stop_Motor();
  8000f8a:	f7ff ff8f 	bl	8000eac <stop_Motor>

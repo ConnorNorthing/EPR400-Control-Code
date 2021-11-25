@@ -54,12 +54,12 @@ uint16_t adcBufferTemp[adcBufferLength];
 uint32_t adcDistanceCount = 0;
 
 //Conversion ratio variable:
-float MM_PPR_Forward = (8600.0f / 765.0f);
-float MM_PPR_Reverse = (12100.0f / 765.0f);
+float MM_PPR_Forward = (6300.0f / 765.0f);
+float MM_PPR_Reverse = (11100.0f / 765.0f);
 
 //Time delay variable
-const int forwardDelay = 25;
-const int reverseDelay = 30;
+const int forwardDelay = 21;
+const int reverseDelay = 21;
 
 //Segment identification variable:
 /* if the colourSelector = 0 -> White segment excited
@@ -82,9 +82,9 @@ int returnHome = 0;
  * distances that the motor can move, which are approximately
  * a minimum of 6mm increments.
  */
-int forwardDistance = 700;
-int reverseDistance = 400;
-int forwardFinalDistance = 200;
+int forwardDistance = 1500;
+int reverseDistance = 1500;
+int forwardFinalDistance = 500;
 
 //Temporary placeholder variables
 int stop_reset = 0;
@@ -715,7 +715,7 @@ void motor_ReturnHome(){
 	 */
 	returnHome = 1;
 	if (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_11) && !HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_15)){
-		run_Reverse_Sequence(765);
+		run_Reverse_Sequence(2000);
 		stop_Motor();
 		returnHome = 0;
 		adcDistanceCount = 0;
